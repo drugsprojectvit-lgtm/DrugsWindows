@@ -23,7 +23,6 @@ def prepare_protein_meeko():
         )
     
     # 2. Identify Source File (Swiss-Model vs Original)
-    # The Ramachandran module updates 'pdb_path' if a Swiss-Model is generated.
     pdb_path = current_pdb_info["pdb_path"]
     pdb_id = current_pdb_info["pdb_id"]
     
@@ -43,8 +42,8 @@ def prepare_protein_meeko():
     output_base = os.path.join(output_dir, "prepared_protein")
     
     # 3. Run Meeko
-    cmd = [  # Uses the exact Python version currently running your app
-        sys.executable, "mk_prepare_receptor.py", # Finds the script inside the meeko package
+    cmd = [  
+        sys.executable, "mk_prepare_receptor.py", 
         "-i", pdb_path,
         "-o", output_base,
         "-p",
@@ -73,9 +72,16 @@ def prepare_protein_meeko():
         with open(pdbqt_path, 'r') as f:
             pdbqt_content = f.read()
         
-        # Create 3D visualization (PDBQT format is similar to PDB)
+        # Create 3D visualization
         protein_name = f"Prepared: {pdb_id} ({'Swiss-Model' if is_swiss else 'Original'})"
-        structure_html = show_structure(pdbqt_content, pdb_id, protein_name)
+        
+        # UPDATED CALL: Pass pdbqt_content as protein_text, None as ligand_text
+        structure_html = show_structure(
+            protein_text=pdbqt_content, 
+            ligand_text=None, 
+            pdb_id=pdb_id, 
+            protein_name=protein_name
+        )
         
         # Create download file
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pdbqt', delete=False)

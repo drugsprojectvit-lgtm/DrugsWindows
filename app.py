@@ -11,11 +11,10 @@ from config import current_pdb_info, PROTEINS_DIR
 from ramachandran import run_ramplot
 from prankweb import run_prankweb_prediction
 from protein_prep import prepare_protein_meeko
-from docking import run_molecular_docking, display_docked_structure
+from docking import run_molecular_docking  # Removed display_docked_structure as we define a new one here
 from admet_analysis import run_admet_prediction
 from utils import map_disease_to_protein, find_best_pdb_structure
 from visualization import show_structure
-
 
 def process_disease(user_input: str):
     """Main function to process disease/protein input."""
@@ -72,7 +71,14 @@ def process_disease(user_input: str):
         </div>
         """
         
-        structure_html = show_structure(pdb_content, pdb_id, protein_name)
+        # UPDATED: Explicitly pass arguments to match new signature
+        # show_structure(protein_text, ligand_text=None, pdb_id=..., protein_name=...)
+        structure_html = show_structure(
+            protein_text=pdb_content, 
+            ligand_text=None, 
+            pdb_id=pdb_id, 
+            protein_name=protein_name
+        )
         
         return {
             info_box: gr.update(value=info_html, visible=True),
@@ -88,6 +94,76 @@ def process_disease(user_input: str):
             download_file: gr.update(value=None),
             search_status: gr.update(value=f"❌ Error: {str(e)}", visible=True)
         }
+
+def visualize_docking_result(selection_value: str):
+    """
+    Visualizes the specific docked pose overlaid on the protein.
+    Handles the 'filepath::pose_number' format correctly.
+    """
+    if not selection_value:
+        return "⚠️ Please select a pose to view."
+        
+    try:
+        # 1. Parse the selection string (Split path and pose number)
+        if "::" not in selection_value:
+            return f"❌ Invalid format. Expected 'path::pose', got: {selection_value}"
+            
+        ligand_path, pose_num_str = selection_value.split("::")
+        target_pose_num = int(pose_num_str)
+        
+        # 2. Check if the actual files exist
+        if not os.path.exists(ligand_path):
+            return f"❌ Ligand file not found at: {ligand_path}"
+            
+        protein_path = current_pdb_info.get("pdb_path")
+        if not protein_path or not os.path.exists(protein_path):
+            return "❌ Protein structure not found. Please load a protein first."
+
+        # 3. Read Protein Data
+        with open(protein_path, 'r') as f:
+            protein_text = f.read()
+            
+        # 4. Read Ligand Data & Extract Specific Pose
+        # We need to find the block starting with "MODEL X" and ending with "ENDMDL"
+        with open(ligand_path, 'r') as f:
+            lines = f.readlines()
+            
+        model_lines = []
+        in_model = False
+        current_model = -1
+        found_pose = False
+        
+        for line in lines:
+            if line.startswith("MODEL"):
+                try:
+                    current_model = int(line.split()[1])
+                except: pass
+                if current_model == target_pose_num:
+                    in_model = True
+                    found_pose = True
+            
+            if in_model:
+                model_lines.append(line)
+                
+            if line.startswith("ENDMDL") and in_model:
+                in_model = False
+                break 
+        
+        # Fallback: If we couldn't parse models (e.g. single pose file), use whole file
+        ligand_text_pose = "".join(model_lines) if found_pose else "".join(lines)
+        
+        pdb_id = current_pdb_info.get("pdb_id", "Docking")
+        
+        # 5. Visualize
+        return show_structure(
+            protein_text=protein_text, 
+            ligand_text=ligand_text_pose, 
+            pdb_id=pdb_id, 
+            protein_name=f"Docked Pose {target_pose_num}"
+        )
+
+    except Exception as e:
+        return f"❌ Visualization Error: {str(e)}"
 
 def process_admet():
     try:
@@ -146,7 +222,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
             """)
             ramplot_btn = gr.Button("🔬 Run Ramachandran Analysis", variant="secondary")
             
-            # Processing status added here
             ramplot_status = gr.HTML(visible=False)
             
             with gr.Row():
@@ -200,9 +275,13 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
             docking_btn = gr.Button("Run Docking", variant="secondary")
             docking_status = gr.HTML(visible=False)
             docking_summary = gr.Dataframe(visible=False)
-            pose_selector = gr.Dropdown(visible=False)
+            
+            # The dropdown will be populated by run_molecular_docking with file paths
+            pose_selector = gr.Dropdown(label="Select Pose to View", visible=False)
+            
             view_pose_btn = gr.Button("View Pose", variant="primary")
-            docked_viewer = gr.HTML()
+            docked_viewer = gr.HTML(label="Docked Interaction Viewer")
+            
             with gr.Row():
                 prev_btn_5 = gr.Button("← Previous", variant="secondary")
                 next_btn_5 = gr.Button("Next: ADMET →", variant="primary")
@@ -247,7 +326,10 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
     prankweb_btn.click(fn=run_prankweb_prediction, inputs=[], outputs=[prankweb_status, prankweb_results])
     prepare_btn.click(fn=prepare_protein_meeko, inputs=[], outputs=[prepare_status, prepared_viewer, prepared_download])
     docking_btn.click(fn=run_molecular_docking, inputs=[], outputs=[docking_status, docking_summary, pose_selector])
-    view_pose_btn.click(fn=display_docked_structure, inputs=[pose_selector], outputs=[docked_viewer])
+    
+    # UPDATED: Use the new local visualization wrapper
+    view_pose_btn.click(fn=visualize_docking_result, inputs=[pose_selector], outputs=[docked_viewer])
+    
     admet_btn.click(fn=process_admet, inputs=[], outputs={admet_status, admet_table, admet_download})
 
 if __name__ == "__main__":
