@@ -131,12 +131,54 @@ def run_molecular_docking():
                                         })
                                 except ValueError: continue
 
-                    # Convert PDBQT -> PDB (Ligand Only)
+                    # 1. Convert PDBQT -> PDB (Ligand Only) via Obabel
                     if os.path.exists(output_pdbqt_file):
                         pdb_ligand_only = os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_ligand_poses.pdb")
                         # We use -h to add hydrogens back for better visualization
                         subprocess.run(['obabel', output_pdbqt_file, '-O', pdb_ligand_only, '-h'], check=False, capture_output=True)
-                        
+
+                        # --- NEW: Generate Combined Complex (Protein + Ligand HETATM) ---
+                        try:
+                            complex_file = os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_complex.pdb")
+                            
+                            # A. Get Receptor Lines (from original PDB to preserve headers/chains if available)
+                            receptor_path = current_pdb_info.get("pdb_path")
+                            receptor_lines = []
+                            if receptor_path and os.path.exists(receptor_path):
+                                with open(receptor_path, 'r') as rf:
+                                    # Keep ATOM, HETATM (cofactors), and TER records
+                                    receptor_lines = [l for l in rf if l.startswith(("ATOM", "HETATM", "TER"))]
+                            
+                            # B. Get Ligand Lines (Extract BEST POSE/MODEL 1 from Vina output)
+                            ligand_lines = []
+                            with open(output_pdbqt_file, 'r') as lf:
+                                in_model_1 = False
+                                for line in lf:
+                                    if line.startswith("MODEL 1"):
+                                        in_model_1 = True
+                                        continue
+                                    if line.startswith("ENDMDL"):
+                                        # Only grab the best pose (Model 1) for the complex file
+                                        break 
+                                    
+                                    if in_model_1 and line.startswith("ATOM"):
+                                        # CHANGE: Rename ATOM to HETATM for differentiation
+                                        new_line = "HETATM" + line[6:]
+                                        ligand_lines.append(new_line)
+
+                            # C. Write Combined File
+                            with open(complex_file, 'w') as cf:
+                                cf.writelines(receptor_lines)
+                                # Ensure separation
+                                if receptor_lines and not receptor_lines[-1].strip() == "TER":
+                                    cf.write("TER\n")
+                                cf.writelines(ligand_lines)
+                                cf.write("END\n")
+
+                        except Exception as complex_err:
+                            print(f"Warning: Could not generate complex PDB for {ligand_name}: {complex_err}")
+                        # ----------------------------------------------------------------
+
                 except subprocess.CalledProcessError as e:
                     print(f"Docking failed for {ligand_name}: {e}")
                     continue
