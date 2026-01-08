@@ -1,3 +1,4 @@
+# docking.py
 """
 Molecular docking module using AutoDock Vina Executable
 """
@@ -127,7 +128,9 @@ def run_molecular_docking():
                                             'binding_energy': affinity,
                                             'center_x': cx, 'center_y': cy, 'center_z': cz,
                                             # Store path to ligand-only PDB
-                                            'pdb_file': os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_ligand_poses.pdb")
+                                            'pdb_file': os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_ligand_poses.pdb"),
+                                            # Placeholder for image path, will be updated if complex is generated
+                                            'interaction_image': "N/A" 
                                         })
                                 except ValueError: continue
 
@@ -137,7 +140,7 @@ def run_molecular_docking():
                         # We use -h to add hydrogens back for better visualization
                         subprocess.run(['obabel', output_pdbqt_file, '-O', pdb_ligand_only, '-h'], check=False, capture_output=True)
 
-                        # --- NEW: Generate Combined Complex (Protein + Ligand HETATM) ---
+                        # --- Generate Combined Complex (Protein + Ligand HETATM) ---
                         try:
                             complex_file = os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_complex.pdb")
                             
@@ -158,7 +161,7 @@ def run_molecular_docking():
                                         in_model_1 = True
                                         continue
                                     if line.startswith("ENDMDL"):
-                                        # Only grab the best pose (Model 1) for the complex file
+                                        # Only grab model 1 for the complex file as per existing workflow
                                         break 
                                     
                                     if in_model_1 and line.startswith("ATOM"):
@@ -174,9 +177,30 @@ def run_molecular_docking():
                                     cf.write("TER\n")
                                 cf.writelines(ligand_lines)
                                 cf.write("END\n")
+                            
+                            # --- NEW: Generate 2D Interaction Image using pandamap ---
+                            # This generates an image for the complex based on Model 1
+                            if os.path.exists(complex_file):
+                                interactions_png = os.path.join(output_dir_pdb, f"{ligand_name}_{pocket_name}_complex_interactions.png")
+                                # Using shell=True as the prompt provided the command as a string
+                                pandamap_cmd = f"pandamap {complex_file} --output {interactions_png}"
+                                try:
+                                    print(f"Running pandamap: {pandamap_cmd}")
+                                    subprocess.run(pandamap_cmd, shell=True, check=True, capture_output=True, text=True)
+                                    
+                                    # If successful, update the image path for all poses associated with this complex
+                                    if os.path.exists(interactions_png):
+                                         for entry in ligand_best_poses:
+                                             if entry['ligand'] == ligand_name and entry['pocket'] == pocket_name:
+                                                 entry['interaction_image'] = interactions_png
+                                except subprocess.CalledProcessError as e:
+                                     print(f"Warning: pandamap failed for {complex_file}: {e.stderr}")
+                                except Exception as e:
+                                     print(f"Warning: An error occurred running pandamap: {e}")
+                            # ---------------------------------------------------------
 
                         except Exception as complex_err:
-                            print(f"Warning: Could not generate complex PDB for {ligand_name}: {complex_err}")
+                            print(f"Warning: Could not generate complex PDB or interacton image for {ligand_name}: {complex_err}")
                         # ----------------------------------------------------------------
 
                 except subprocess.CalledProcessError as e:
@@ -195,6 +219,7 @@ def run_molecular_docking():
             choices = []
             for idx, row in summary_df.iterrows():
                 label = f"{row['ligand']} - {row['pocket']} (Pose {row['pose_number']}) | {row['binding_energy']:.2f} kcal/mol"
+                # Value uniquely identifies the pose in the dataframe
                 value = f"{row['pdb_file']}::{row['pose_number']}"
                 choices.append((label, value))
             
@@ -216,73 +241,3 @@ def run_molecular_docking():
     
     except Exception as e:
         yield (gr.update(value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Error: {str(e)}</div>", visible=True), None, gr.update(choices=[]))
-
-
-def display_docked_structure(selection_value):
-    """
-    Displays the docking result by overlaying the Protein and the specific Ligand Pose.
-    """
-    if not selection_value:
-        return "<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Please select a pose.</div>"
-    
-    try:
-        if "::" not in selection_value:
-             return f"❌ Invalid selection format: {selection_value}"
-             
-        ligand_path, pose_num_str = selection_value.split("::")
-        target_pose_num = int(pose_num_str)
-        
-        # Get Protein Structure
-        protein_path = current_pdb_info.get("pdb_path")
-        if not protein_path or not os.path.exists(protein_path):
-             return "❌ Protein structure not found in memory."
-             
-        with open(protein_path, 'r') as f:
-            protein_text = f.read()
-
-        # Get Ligand Structure (Specific Pose)
-        if not os.path.exists(ligand_path):
-             return f"❌ Ligand file not found: {ligand_path}"
-
-        # Extract only the specific model
-        ligand_text_pose = ""
-        with open(ligand_path, 'r') as f:
-            lines = f.readlines()
-            
-        in_model = False
-        current_model_num = -1
-        found_pose = False
-        model_lines = []
-        
-        for line in lines:
-            if line.startswith("MODEL"):
-                try:
-                    current_model_num = int(line.split()[1])
-                except: pass
-                if current_model_num == target_pose_num:
-                    in_model = True
-                    found_pose = True
-            
-            if in_model:
-                model_lines.append(line)
-            
-            if line.startswith("ENDMDL"):
-                if in_model:
-                    in_model = False
-                    break 
-        
-        if found_pose:
-            ligand_text_pose = "".join(model_lines)
-        else:
-            # Fallback if no MODEL tags (single pose file)
-            ligand_text_pose = "".join(lines)
-
-        return show_structure(
-            protein_text=protein_text,
-            ligand_text=ligand_text_pose,
-            pdb_id="Docking Result",
-            protein_name=f"Pose {target_pose_num}"
-        )
-        
-    except Exception as e:
-        return f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Visualization Error: {str(e)}</div>"

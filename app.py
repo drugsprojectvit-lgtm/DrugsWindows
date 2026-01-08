@@ -1,3 +1,4 @@
+# app.py
 """
 Main Gradio interface for Protein Structure Finder & Analyzer
 """
@@ -11,7 +12,7 @@ from config import current_pdb_info, PROTEINS_DIR
 from ramachandran import run_ramplot
 from prankweb import run_prankweb_prediction
 from protein_prep import prepare_protein_meeko
-from docking import run_molecular_docking  # Removed display_docked_structure as we define a new one here
+from docking import run_molecular_docking
 from admet_analysis import run_admet_prediction
 from utils import map_disease_to_protein, find_best_pdb_structure
 from visualization import show_structure
@@ -71,8 +72,6 @@ def process_disease(user_input: str):
         </div>
         """
         
-        # UPDATED: Explicitly pass arguments to match new signature
-        # show_structure(protein_text, ligand_text=None, pdb_id=..., protein_name=...)
         structure_html = show_structure(
             protein_text=pdb_content, 
             ligand_text=None, 
@@ -95,29 +94,52 @@ def process_disease(user_input: str):
             search_status: gr.update(value=f"❌ Error: {str(e)}", visible=True)
         }
 
-def visualize_docking_result(selection_value: str):
+# UPDATED: Function signature changed to accept the summary dataframe
+def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
     """
-    Visualizes the specific docked pose overlaid on the protein.
+    Visualizes the specific docked pose overlaid on the protein and displays the 2D interaction image.
     Handles the 'filepath::pose_number' format correctly.
     """
     if not selection_value:
-        return "⚠️ Please select a pose to view."
+        return "⚠️ Please select a pose to view.", None
         
+    # Initialize image path as None
+    image_path = None
+    
     try:
         # 1. Parse the selection string (Split path and pose number)
         if "::" not in selection_value:
-            return f"❌ Invalid format. Expected 'path::pose', got: {selection_value}"
+            return f"❌ Invalid format. Expected 'path::pose', got: {selection_value}", None
             
         ligand_path, pose_num_str = selection_value.split("::")
         target_pose_num = int(pose_num_str)
+
+        # --- NEW: Retrieve Image Path from Dataframe ---
+        if summary_df is not None and not summary_df.empty:
+            try:
+                # Find the row matching the selected PDB file and pose number
+                # Use string conversion for safe comparison of potential path formats
+                row = summary_df[
+                    (summary_df['pdb_file'].astype(str) == str(ligand_path)) & 
+                    (summary_df['pose_number'].astype(int) == target_pose_num)
+                ]
+                
+                if not row.empty and 'interaction_image' in row.columns:
+                    img_p = row.iloc[0]['interaction_image']
+                    # Check if it's a valid path and not the "N/A" placeholder
+                    if img_p and isinstance(img_p, str) and os.path.exists(img_p) and img_p != "N/A":
+                        image_path = img_p
+            except Exception as img_err:
+                 print(f"Error retrieving interaction image path: {img_err}")
+        # -----------------------------------------------
         
         # 2. Check if the actual files exist
         if not os.path.exists(ligand_path):
-            return f"❌ Ligand file not found at: {ligand_path}"
+            return f"❌ Ligand file not found at: {ligand_path}", image_path
             
         protein_path = current_pdb_info.get("pdb_path")
         if not protein_path or not os.path.exists(protein_path):
-            return "❌ Protein structure not found. Please load a protein first."
+            return "❌ Protein structure not found. Please load a protein first.", image_path
 
         # 3. Read Protein Data
         with open(protein_path, 'r') as f:
@@ -154,16 +176,19 @@ def visualize_docking_result(selection_value: str):
         
         pdb_id = current_pdb_info.get("pdb_id", "Docking")
         
-        # 5. Visualize
-        return show_structure(
+        # 5. Visualize 3D structure
+        html_viewer = show_structure(
             protein_text=protein_text, 
             ligand_text=ligand_text_pose, 
             pdb_id=pdb_id, 
             protein_name=f"Docked Pose {target_pose_num}"
         )
 
+        # Return both the 3D viewer HTML and the 2D image path
+        return html_viewer, image_path
+
     except Exception as e:
-        return f"❌ Visualization Error: {str(e)}"
+        return f"❌ Visualization Error: {str(e)}", None
 
 def process_admet():
     try:
@@ -274,13 +299,21 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
             """)
             docking_btn = gr.Button("Run Docking", variant="secondary")
             docking_status = gr.HTML(visible=False)
+            
+            # This dataframe holds the results including the image paths
             docking_summary = gr.Dataframe(visible=False)
             
             # The dropdown will be populated by run_molecular_docking with file paths
             pose_selector = gr.Dropdown(label="Select Pose to View", visible=False)
             
-            view_pose_btn = gr.Button("View Pose", variant="primary")
-            docked_viewer = gr.HTML(label="Docked Interaction Viewer")
+            view_pose_btn = gr.Button("View Pose & Interactions", variant="primary")
+            
+            # UPDATED Layout: Split row for 3D viewer and 2D Image
+            with gr.Row():
+                with gr.Column(scale=2):
+                    docked_viewer = gr.HTML(label="3D Interaction Viewer")
+                with gr.Column(scale=1):
+                    interaction_image_viewer = gr.Image(label="2D Interaction Map", type="filepath", visible=True)
             
             with gr.Row():
                 prev_btn_5 = gr.Button("← Previous", variant="secondary")
@@ -327,8 +360,12 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
     prepare_btn.click(fn=prepare_protein_meeko, inputs=[], outputs=[prepare_status, prepared_viewer, prepared_download])
     docking_btn.click(fn=run_molecular_docking, inputs=[], outputs=[docking_status, docking_summary, pose_selector])
     
-    # UPDATED: Use the new local visualization wrapper
-    view_pose_btn.click(fn=visualize_docking_result, inputs=[pose_selector], outputs=[docked_viewer])
+    # UPDATED: Pass the summary dataframe as an input and update both viewers as output
+    view_pose_btn.click(
+        fn=visualize_docking_result, 
+        inputs=[pose_selector, docking_summary], 
+        outputs=[docked_viewer, interaction_image_viewer]
+    )
     
     admet_btn.click(fn=process_admet, inputs=[], outputs={admet_status, admet_table, admet_download})
 
