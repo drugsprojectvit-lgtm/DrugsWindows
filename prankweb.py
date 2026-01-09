@@ -1,39 +1,40 @@
 """
-PrankWeb binding site prediction module
+PrankWeb (Local P2Rank) binding site prediction module
 """
 
 import os
-import time
-import zipfile
-import subprocess  # Added for obabel
+import subprocess
+import glob
 import pandas as pd
 import gradio as gr
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from config import current_pdb_info, PRANKWEB_OUTPUT_DIR, PREPARED_PROTEIN_DIR
+
+# --- CONFIGURATION ---
+# Path to your P2Rank folder (relative or absolute)
+P2RANK_HOME = "p2rank_2.5.1" 
+# On Windows use 'prank.bat', on Linux/Mac use 'prank'
+P2RANK_CMD = "prank.bat" if os.name == 'nt' else "prank"
 
 def convert_pdbqt_to_pdb(pdbqt_file, pdb_file):
     """
     Converts PDBQT to PDB using OpenBabel (obabel).
     """
     try:
-        # Using obabel to convert. -h adds hydrogens (optional, but often good for pdbqt conversions)
+        # Using obabel to convert. -h adds hydrogens
         subprocess.run(['obabel', pdbqt_file, '-O', pdb_file], 
-                     check=True, capture_output=True, shell=True)
+                       check=True, capture_output=True, shell=True)
         return True
     except Exception as e:
         print(f"OpenBabel conversion failed: {e}")
         return False
 
 def run_prankweb_prediction():
-    """Run PrankWeb prediction using the Prepared Protein (converted back to PDB)."""
+    """Run Binding Site prediction using LOCAL P2Rank."""
     
-    # 1. Validate Input (Must come from Protein Prep step now)
+    # 1. Validate Input (Must come from Protein Prep step)
     prepared_pdbqt_path = current_pdb_info.get("prepared_pdbqt")
     
-    # Fallback to PREPARED_PROTEIN_DIR if variable is missing but file exists
+    # Fallback checks
     if not prepared_pdbqt_path:
          potential_path = os.path.join(PREPARED_PROTEIN_DIR, "prepared_protein.pdbqt")
          if os.path.exists(potential_path):
@@ -45,106 +46,83 @@ def run_prankweb_prediction():
             gr.update(value=None, visible=False)
         )
     
-    # Show processing message
+    # Check if P2Rank exists
+    if not os.path.exists(P2RANK_HOME):
+         return (
+            gr.update(value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ P2Rank folder not found at: {P2RANK_HOME}. Please check the path.</div>", visible=True),
+            gr.update(value=None, visible=False)
+        )
+
     yield (
-        gr.update(value="<div style='padding: 20px; background: #fff3cd; border-radius: 8px; color: #856404;'>⚙️ Converting PDBQT to PDB using OpenBabel...</div>", visible=True),
+        gr.update(value="<div style='padding: 20px; background: #fff3cd; border-radius: 8px; color: #856404;'>⚙️ Converting PDBQT to PDB...</div>", visible=True),
         gr.update(value=None, visible=False)
     )
     
     output_dir = PRANKWEB_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
     
-    # 2. Convert PDBQT -> PDB
-    temp_pdb_filename = "prepared_for_prankweb.pdb"
+    # 2. Convert PDBQT -> PDB (P2Rank requires PDB)
+    temp_pdb_filename = "prepared_for_p2rank.pdb"
+    # Use ABSOLUTE paths because we are changing CWD later
     temp_pdb_path = os.path.abspath(os.path.join(output_dir, temp_pdb_filename))
+    abs_output_dir = os.path.abspath(output_dir)
     
     success = convert_pdbqt_to_pdb(prepared_pdbqt_path, temp_pdb_path)
     
     if not success:
          return (
-            gr.update(value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Failed to convert PDBQT to PDB. Please ensure <b>OpenBabel (obabel)</b> is installed.</div>", visible=True),
+            gr.update(value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Failed to convert PDBQT to PDB. Please ensure <b>OpenBabel</b> is installed.</div>", visible=True),
             gr.update(value=None, visible=False)
         )
 
     yield (
-        gr.update(value="<div style='padding: 20px; background: #fff3cd; border-radius: 8px; color: #856404;'>🔮 Uploading to PrankWeb (this may take several minutes)...</div>", visible=True),
+        gr.update(value="<div style='padding: 20px; background: #fff3cd; border-radius: 8px; color: #856404;'>⚡ Running local P2Rank prediction...</div>", visible=True),
         gr.update(value=None, visible=False)
     )
 
-    # 3. Selenium Automation
-    
-    # Setup Chrome driver with download preferences and HEADLESS mode
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument('--headless=new')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--window-size=1920,1080')
-    prefs = {
-        "download.default_directory": os.path.abspath(output_dir),
-        "download.prompt_for_download": False,
-    }
-    chrome_options.add_experimental_option("prefs", prefs)
-    
+    # 3. Execute Local P2Rank
     try:
-        driver = webdriver.Chrome(options=chrome_options)
+        # Command: prank predict -f "file.pdb" -o "folder"
+        # We use cwd=P2RANK_HOME to simulate "cd into folder"
+        cmd = [
+            P2RANK_CMD,
+            "predict",
+            "-f", temp_pdb_path,
+            "-o", abs_output_dir
+        ]
         
-        driver.get("https://prankweb.cz/")
-        time.sleep(3)
-        
-        wait = WebDriverWait(driver, 30)
-        custom_structure = wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Custom structure')]")))
-        driver.execute_script("arguments[0].click();", custom_structure)
-        time.sleep(1)
-        
-        # Upload the CONVERTED PDB file
-        file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-        file_input.send_keys(temp_pdb_path)
-        time.sleep(2)
-        
-        submit_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[type='submit']")))
-        driver.execute_script("arguments[0].click();", submit_btn)
-        
-        wait_long = WebDriverWait(driver, 600)
-        info_tab = wait_long.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Info')]")))
-        
-        driver.execute_script("arguments[0].click();", info_tab)
-        time.sleep(2)
-        
-        download_btn = wait_long.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Download prediction data')]")))
-        driver.execute_script("arguments[0].click();", download_btn)
-        
-        time.sleep(10)
-        driver.quit()
-        
-        # Find and extract the zip file
-        zip_files = [f for f in os.listdir(output_dir) if f.endswith('.zip')]
-        if not zip_files:
-            return (
-                gr.update(value="❌ Download failed - no zip file found", visible=True),
-                gr.update(value=None, visible=False)
-            )
-        
-        # Get the most recent zip file if multiple exist
-        zip_files.sort(key=lambda x: os.path.getmtime(os.path.join(output_dir, x)), reverse=True)
-        target_zip = zip_files[0]
-        
-        zip_path = os.path.join(output_dir, target_zip)
-        extract_path = os.path.join(output_dir, target_zip.replace('.zip', ''))
-        
-        os.makedirs(extract_path, exist_ok=True)
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_path)
-        
-        # Find the CSV file
-        csv_path = os.path.join(extract_path, "structure.pdb_predictions.csv")
+        # Run subprocess inside the p2rank folder
+        # shell=True is often required for .bat files on Windows
+        process = subprocess.run(
+            cmd, 
+            cwd=P2RANK_HOME, 
+            capture_output=True, 
+            text=True, 
+            shell=True 
+        )
+
+        if process.returncode != 0:
+            raise Exception(f"P2Rank exited with error: {process.stderr}")
+
+        # 4. Process Results
+        # P2Rank output format is usually: [pdb_filename]_predictions.csv
+        expected_csv_name = f"{os.path.splitext(temp_pdb_filename)[0]}_predictions.csv"
+        csv_path = os.path.join(output_dir, expected_csv_name)
+
+        # If exact match fails, try to find any *_predictions.csv in the output dir
         if not os.path.exists(csv_path):
-            return (
-                gr.update(value="❌ CSV file not found in extracted data", visible=True),
-                gr.update(value=None, visible=False)
-            )
-        
+             found_csvs = glob.glob(os.path.join(output_dir, "*_predictions.csv"))
+             if found_csvs:
+                 csv_path = found_csvs[0]
+             else:
+                 raise FileNotFoundError("Could not find _predictions.csv in output folder.")
+
         # Read and filter CSV
         df = pd.read_csv(csv_path)
+        
+        # Clean up column names (strip whitespace)
+        df.columns = df.columns.str.strip()
+        
         columns_to_drop = ['residue_ids', 'surf_atom_ids']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns], errors='ignore')
         
@@ -152,14 +130,12 @@ def run_prankweb_prediction():
         current_pdb_info["prankweb_csv"] = csv_path
         
         yield (
-            gr.update(value=f"<div style='padding: 20px; background: #d4edda; border-radius: 8px; color: #155724;'>✅ PrankWeb prediction completed!<br><small>Converted PDBQT to PDB via OpenBabel</small></div>", visible=True),
+            gr.update(value=f"<div style='padding: 20px; background: #d4edda; border-radius: 8px; color: #155724;'>✅ Local P2Rank prediction completed!</div>", visible=True),
             gr.update(value=df, visible=True)
         )
         
     except Exception as e:
-        if 'driver' in locals():
-            driver.quit()
         yield (
-            gr.update(value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Error: {str(e)}</div>", visible=True),
+            gr.update(value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Error executing P2Rank: {str(e)}</div>", visible=True),
             gr.update(value=None, visible=False)
         )
