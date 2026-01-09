@@ -1,4 +1,3 @@
-# app.py
 """
 Main Gradio interface for Protein Structure Finder & Analyzer
 """
@@ -94,7 +93,6 @@ def process_disease(user_input: str):
             search_status: gr.update(value=f"❌ Error: {str(e)}", visible=True)
         }
 
-# UPDATED: Function signature changed to accept the summary dataframe
 def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
     """
     Visualizes the specific docked pose overlaid on the protein and displays the 2D interaction image.
@@ -103,22 +101,17 @@ def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
     if not selection_value:
         return "⚠️ Please select a pose to view.", None
         
-    # Initialize image path as None
     image_path = None
     
     try:
-        # 1. Parse the selection string (Split path and pose number)
         if "::" not in selection_value:
             return f"❌ Invalid format. Expected 'path::pose', got: {selection_value}", None
             
         ligand_path, pose_num_str = selection_value.split("::")
         target_pose_num = int(pose_num_str)
 
-        # --- NEW: Retrieve Image Path from Dataframe ---
         if summary_df is not None and not summary_df.empty:
             try:
-                # Find the row matching the selected PDB file and pose number
-                # Use string conversion for safe comparison of potential path formats
                 row = summary_df[
                     (summary_df['pdb_file'].astype(str) == str(ligand_path)) & 
                     (summary_df['pose_number'].astype(int) == target_pose_num)
@@ -126,14 +119,11 @@ def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
                 
                 if not row.empty and 'interaction_image' in row.columns:
                     img_p = row.iloc[0]['interaction_image']
-                    # Check if it's a valid path and not the "N/A" placeholder
                     if img_p and isinstance(img_p, str) and os.path.exists(img_p) and img_p != "N/A":
                         image_path = img_p
             except Exception as img_err:
                  print(f"Error retrieving interaction image path: {img_err}")
-        # -----------------------------------------------
         
-        # 2. Check if the actual files exist
         if not os.path.exists(ligand_path):
             return f"❌ Ligand file not found at: {ligand_path}", image_path
             
@@ -141,12 +131,9 @@ def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
         if not protein_path or not os.path.exists(protein_path):
             return "❌ Protein structure not found. Please load a protein first.", image_path
 
-        # 3. Read Protein Data
         with open(protein_path, 'r') as f:
             protein_text = f.read()
             
-        # 4. Read Ligand Data & Extract Specific Pose
-        # We need to find the block starting with "MODEL X" and ending with "ENDMDL"
         with open(ligand_path, 'r') as f:
             lines = f.readlines()
             
@@ -171,12 +158,10 @@ def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
                 in_model = False
                 break 
         
-        # Fallback: If we couldn't parse models (e.g. single pose file), use whole file
         ligand_text_pose = "".join(model_lines) if found_pose else "".join(lines)
         
         pdb_id = current_pdb_info.get("pdb_id", "Docking")
         
-        # 5. Visualize 3D structure
         html_viewer = show_structure(
             protein_text=protein_text, 
             ligand_text=ligand_text_pose, 
@@ -184,7 +169,6 @@ def visualize_docking_result(selection_value: str, summary_df: pd.DataFrame):
             protein_name=f"Docked Pose {target_pose_num}"
         )
 
-        # Return both the 3D viewer HTML and the 2D image path
         return html_viewer, image_path
 
     except Exception as e:
@@ -247,7 +231,9 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
             """)
             ramplot_btn = gr.Button("🔬 Run Ramachandran Analysis", variant="secondary")
             
+            # Components for status and stats
             ramplot_status = gr.HTML(visible=False)
+            ramplot_stats = gr.HTML(visible=False) # NEW: To display highlighted percentage
             
             with gr.Row():
                 plot1 = gr.Image(label="Map Type 2D", visible=False)
@@ -300,15 +286,10 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
             docking_btn = gr.Button("Run Docking", variant="secondary")
             docking_status = gr.HTML(visible=False)
             
-            # This dataframe holds the results including the image paths
             docking_summary = gr.Dataframe(visible=False)
-            
-            # The dropdown will be populated by run_molecular_docking with file paths
             pose_selector = gr.Dropdown(label="Select Pose to View", visible=False)
-            
             view_pose_btn = gr.Button("View Pose & Interactions", variant="primary")
             
-            # UPDATED Layout: Split row for 3D viewer and 2D Image
             with gr.Row():
                 with gr.Column(scale=2):
                     docked_viewer = gr.HTML(label="3D Interaction Viewer")
@@ -336,31 +317,30 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Protein Structure Finder & Analyze
 
     # Events
     next_btn_1.click(lambda: gr.Tabs(selected=1), None, tabs)
-    
     prev_btn_2.click(lambda: gr.Tabs(selected=0), None, tabs)
     next_btn_2.click(lambda: gr.Tabs(selected=2), None, tabs)
-    
-    # Prep Tab Events
     prev_btn_3.click(lambda: gr.Tabs(selected=1), None, tabs)
     next_btn_3.click(lambda: gr.Tabs(selected=3), None, tabs)
-    
-    # PrankWeb Tab Events
     prev_btn_4.click(lambda: gr.Tabs(selected=2), None, tabs)
     next_btn_4.click(lambda: gr.Tabs(selected=4), None, tabs)
-    
     prev_btn_5.click(lambda: gr.Tabs(selected=3), None, tabs)
     next_btn_5.click(lambda: gr.Tabs(selected=5), None, tabs)
-    
     prev_btn_6.click(lambda: gr.Tabs(selected=4), None, tabs)
     next_btn_6.click(lambda: gr.Tabs(selected=0), None, tabs)
 
     search_btn.click(process_disease, inputs=[disease_input], outputs={info_box, structure_viewer, download_file, search_status})
-    ramplot_btn.click(fn=run_ramplot, inputs=[], outputs=[ramplot_status, plot1, plot2, plot3, plot4])
+    
+    # UPDATED: connect ramplot_stats to the output
+    ramplot_btn.click(
+        fn=run_ramplot, 
+        inputs=[], 
+        outputs=[ramplot_status, plot1, plot2, plot3, plot4, ramplot_stats]
+    )
+    
     prankweb_btn.click(fn=run_prankweb_prediction, inputs=[], outputs=[prankweb_status, prankweb_results])
     prepare_btn.click(fn=prepare_protein_meeko, inputs=[], outputs=[prepare_status, prepared_viewer, prepared_download])
     docking_btn.click(fn=run_molecular_docking, inputs=[], outputs=[docking_status, docking_summary, pose_selector])
     
-    # UPDATED: Pass the summary dataframe as an input and update both viewers as output
     view_pose_btn.click(
         fn=visualize_docking_result, 
         inputs=[pose_selector, docking_summary], 

@@ -4,6 +4,7 @@ Ramachandran plot analysis module with SWISS-MODEL integration
 
 import os
 import subprocess
+import glob
 import gradio as gr
 import requests
 import time
@@ -37,31 +38,30 @@ def check_remark_465(pdb_path: str) -> bool:
         return False
 
 
-def extract_favoured_percentage(csv_path: str) -> float:
+def extract_favoured_info(csv_path: str):
     """
-    Extract the Favoured percentage from CSV file.
-    Looks for pattern like: Favoured: ,232,(85.294%)
+    Extract the Favoured percentage and format it cleanly.
+    Returns a tuple (percentage (float), display_string (str))
     """
     try:
         with open(csv_path, 'r') as f:
             content = f.read()
             
-            # Search for pattern: Favoured: ,xxx,(yy.yyy%)
-            match = re.search(r'Favoured:\s*,\d+,\((\d+\.?\d*)%\)', content)
+            # Search for pattern: Favoured: ,count,(percent%)
+            # We specifically want to capture the number inside the brackets
+            match = re.search(r'Favoured:.*\((\d+\.?\d*)%\)', content)
             
             if match:
                 percentage = float(match.group(1))
-                return percentage
+                # Format exactly as requested: "Favoured: 95.079%"
+                display_string = f"Favoured: {percentage}%"
+                return percentage, display_string
             else:
-                print(f"Warning: Could not find 'Favoured:' percentage in {csv_path}")
-                return 0.0
+                return 0.0, "Favoured: Not found"
                 
-    except FileNotFoundError:
-        print(f"Warning: CSV file not found at '{csv_path}'")
-        return 0.0
     except Exception as e:
         print(f"Error reading CSV file: {e}")
-        return 0.0
+        return 0.0, "Error reading stats"
 
 
 def parse_fasta_file(fasta_path: str) -> list:
@@ -75,22 +75,15 @@ def parse_fasta_file(fasta_path: str) -> list:
         with open(fasta_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                
-                # If we encounter a header line
                 if line.startswith('>'):
-                    # If we have a sequence accumulated, save it
                     if current_sequence:
                         sequences.append("".join(current_sequence))
                         current_sequence = []
                 else:
-                    # Add sequence line (ignore empty lines)
                     if line:
                         current_sequence.append(line)
-            
-            # Don't forget the last sequence
             if current_sequence:
                 sequences.append("".join(current_sequence))
-        
         return sequences
     except Exception as e:
         print(f"Error parsing FASTA file: {e}")
@@ -105,25 +98,15 @@ def run_swiss_model(fasta_path: str, pdb_id: str, progress_callback=None) -> str
     if progress_callback:
         progress_callback(0.1, desc="📖 Reading FASTA file...")
     
-    # Parse FASTA file
     sequences = parse_fasta_file(fasta_path)
-    
     if not sequences:
-        print("Error: No valid sequences found in FASTA file")
         return None
     
-    # Use single sequence or multiple
-    if len(sequences) == 1:
-        fasta_input = sequences[0]
-        print(f"Single sequence detected with {len(fasta_input)} residues")
-    else:
-        fasta_input = sequences
-        print(f"Multiple sequences detected: {[len(s) for s in sequences]} residues each")
+    fasta_input = sequences if len(sequences) > 1 else sequences[0]
     
     if progress_callback:
         progress_callback(0.2, desc="🚀 Submitting job to SWISS-MODEL...")
     
-    # Submit modeling job
     project_title = f"Homology_Model_{pdb_id}"
     payload = {
         "target_sequences": fasta_input,
@@ -138,27 +121,20 @@ def run_swiss_model(fasta_path: str, pdb_id: str, progress_callback=None) -> str
             timeout=60
         )
         submit_response.raise_for_status()
-        
         project_id = submit_response.json().get("project_id")
-        print(f"Job submitted successfully! Project ID: {project_id}")
         
-    except requests.exceptions.HTTPError as e:
-        print(f"Error submitting job: {e.response.status_code}")
-        print(f"Details: {e.response.text}")
-        return None
     except Exception as e:
         print(f"Error submitting SWISS-MODEL job: {e}")
         return None
     
     # Poll for results
-    max_wait_time = 1800  # 30 minutes max
+    max_wait_time = 1800
     start_time = time.time()
-    poll_interval = 30  # Check every 30 seconds
+    poll_interval = 30
     
     while True:
         elapsed = time.time() - start_time
         if elapsed > max_wait_time:
-            print("SWISS-MODEL job timed out after 30 minutes")
             return None
         
         if progress_callback:
@@ -172,29 +148,18 @@ def run_swiss_model(fasta_path: str, pdb_id: str, progress_callback=None) -> str
                 timeout=60
             )
             status_response.raise_for_status()
-            
             status_data = status_response.json()
             job_status = status_data.get("status")
             
-            print(f"Current status: {job_status}")
-            
             if job_status == "COMPLETED":
-                print("Modeling completed!")
-                
                 if progress_callback:
                     progress_callback(0.85, desc="📥 Downloading model...")
                 
-                # Download the PDB file
                 models = status_data.get("models")
-                if not models:
-                    print("Job completed but no models were found")
-                    return None
+                if not models: return None
                 
-                # Get the first (and usually best) model's ID
                 model_id = models[0].get("model_id")
                 output_filename = os.path.join(PROTEINS_DIR, f"{pdb_id}_swiss_model.pdb")
-                
-                print(f"Downloading model {model_id} to {output_filename}...")
                 
                 pdb_response = requests.get(
                     f"{SWISS_MODEL_BASE_URL}/project/{project_id}/models/{model_id}.pdb",
@@ -203,139 +168,92 @@ def run_swiss_model(fasta_path: str, pdb_id: str, progress_callback=None) -> str
                 )
                 pdb_response.raise_for_status()
                 
-                # Save the file
                 with open(output_filename, "w") as f:
                     f.write(pdb_response.text)
                     
-                print(f"Successfully saved model to: {output_filename}")
                 return output_filename
                 
             elif job_status == "FAILED":
-                print("SWISS-MODEL job failed")
                 return None
-                
             elif job_status in ["RUNNING", "PENDING"]:
-                print(f"Job is still running. Waiting {poll_interval} seconds...")
                 time.sleep(poll_interval)
-            
             else:
-                print(f"Unknown status: {job_status}. Waiting...")
                 time.sleep(poll_interval)
         
-        except requests.exceptions.HTTPError as e:
-            print(f"Error checking status: {e.response.status_code}. Retrying...")
-            time.sleep(poll_interval)
-        except Exception as e:
-            print(f"Error during status check: {e}. Retrying...")
+        except Exception:
             time.sleep(poll_interval)
 
 
 def run_ramplot(progress=gr.Progress()):
     """
-    Run Ramachandran plot analysis with automatic SWISS-MODEL integration.
-    If REMARK 465 is found, runs SWISS-MODEL first.
+    Run Ramachandran plot analysis.
+    Returns: (status_html, plot1, plot2, plot3, plot4, stats_html)
     """
-    # -------------------------
-    # 1️⃣ No structure case
-    # -------------------------
+    # 1. No structure case
     if not current_pdb_info["pdb_id"] or not current_pdb_info["pdb_path"]:
         return (
-            gr.update(
-                value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ No structure loaded. Please search for a disease/protein first.</div>",
-                visible=True
-            ),
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False),
+            gr.update(value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ No structure loaded.</div>", visible=True),
+            gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False)
         )
 
     pdb_id = current_pdb_info["pdb_id"]
     pdb_path = current_pdb_info["pdb_path"]
     
-    # -------------------------
-    # 2️⃣ Check for REMARK 465
-    # -------------------------
+    # 2. Check for REMARK 465
     progress(0.05, desc="🔍 Checking for missing residues (REMARK 465)...")
-    
     has_missing_residues = check_remark_465(pdb_path)
     
     if has_missing_residues:
         progress(0.1, desc="⚠️ Missing residues detected - SWISS-MODEL required...")
-        
-        # Check if FASTA file exists
         fasta_path = os.path.join(PROTEINS_DIR, f"{pdb_id}.fasta")
         
         if not os.path.exists(fasta_path):
             return (
-                gr.update(
-                    value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ FASTA file not found at {fasta_path}. Cannot proceed with SWISS-MODEL.</div>",
-                    visible=True
-                ),
-                gr.update(visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
+                gr.update(value=f"<div style='padding: 20px; background: #fee; color: #c33;'>❌ FASTA file not found.</div>", visible=True),
+                gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False)
             )
         
-        # Run SWISS-MODEL
         swiss_model_path = run_swiss_model(fasta_path, pdb_id, progress)
         
         if not swiss_model_path:
             return (
-                gr.update(
-                    value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ SWISS-MODEL homology modeling failed. Cannot proceed.</div>",
-                    visible=True
-                ),
-                gr.update(visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
+                gr.update(value="<div style='padding: 20px; background: #fee; color: #c33;'>❌ SWISS-MODEL failed.</div>", visible=True),
+                gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False),
                 gr.update(visible=False)
             )
         
-        # Update the PDB path to use the SWISS-MODEL generated structure
         pdb_path = swiss_model_path
         current_pdb_info["pdb_path"] = swiss_model_path
-        
-        progress(0.9, desc="✅ SWISS-MODEL complete - proceeding with analysis...")
+        progress(0.9, desc="✅ SWISS-MODEL complete...")
     else:
-        progress(0.1, desc="✅ No missing residues - using original structure...")
+        progress(0.1, desc="✅ No missing residues - using original...")
 
-    # -------------------------
-    # 3️⃣ Run Ramachandran analysis
-    # -------------------------
+    # 3. Run Ramachandran analysis
     progress(0.3, desc="🔬 Running Ramachandran plot analysis...")
 
     try:
         input_folder = PROTEINS_DIR
         output_folder = RAMPLOT_OUTPUT_DIR
-
         os.makedirs(input_folder, exist_ok=True)
         os.makedirs(output_folder, exist_ok=True)
 
         progress(0.5, desc="Executing ramplot command...")
 
         cmd = [
-            "ramplot", "pdb",
-            "-i", input_folder,
-            "-o", output_folder,
-            "-m", "0",
-            "-r", "600",
-            "-p", "png"
+            "ramplot", "pdb", "-i", input_folder, "-o", output_folder,
+            "-m", "0", "-r", "600", "-p", "png"
         ]
 
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=120
-        )
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
 
         progress(0.8, desc="Loading generated plots...")
 
         plot_dir = os.path.join(output_folder, "Plots")
-
         plot_files = {
             'map2d': os.path.join(plot_dir, "MapType2DAll.png"),
             'map3d': os.path.join(plot_dir, "MapType3DAll.png"),
@@ -343,51 +261,62 @@ def run_ramplot(progress=gr.Progress()):
             'std3d': os.path.join(plot_dir, "StdMapType3DGeneral.png"),
         }
 
-        # Safety check
+        # 4. Extract Statistics
+        csv_files = glob.glob(os.path.join(output_folder, "*.csv"))
+        stats_html = ""
+        
+        if csv_files:
+            # Assume the most recently modified CSV or the first one is relevant
+            csv_path = csv_files[0]
+            pct, clean_display_string = extract_favoured_info(csv_path)
+            
+            # Determine Color based on quality
+            if pct >= 98:
+                bg_color = "#d4edda" # Green
+                text_color = "#155724"
+                status_icon = "🌟 Excellent"
+            elif pct >= 90:
+                bg_color = "#fff3cd" # Yellow/Orange
+                text_color = "#856404"
+                status_icon = "✅ Acceptable"
+            else:
+                bg_color = "#f8d7da" # Red
+                text_color = "#721c24"
+                status_icon = "⚠️ Low Quality"
+
+            stats_html = f"""
+            <div style="margin-top: 15px; padding: 15px; background: {bg_color}; border-left: 5px solid {text_color}; border-radius: 4px; color: {text_color}; font-size: 1.1em;">
+                <strong>{status_icon} Structure Quality</strong><br>
+                <span style="font-size: 1.4em; font-weight: bold;">{clean_display_string}</span>
+            </div>
+            """
+        else:
+            stats_html = "<div style='color: gray;'>No statistics CSV found.</div>"
+
+        # Safety check for images
         for name, path in plot_files.items():
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Missing plot: {path}")
 
         progress(1.0, desc="✅ Complete!")
 
-        # -------------------------
-        # 4️⃣ Final successful UI update
-        # -------------------------
         success_msg = "✅ Ramachandran plot analysis completed!"
         if has_missing_residues:
-            success_msg += "<br>🔧 Used SWISS-MODEL homology model (original had missing residues)"
+            success_msg += "<br>🔧 Used SWISS-MODEL homology model"
         
         return (
-            gr.update(
-                value=f"<div style='padding: 20px; background: #d4edda; border-radius: 8px; color: #155724;'>{success_msg}</div>",
-                visible=True
-            ),
+            gr.update(value=f"<div style='padding: 20px; background: #d4edda; border-radius: 8px; color: #155724;'>{success_msg}</div>", visible=True),
             gr.update(value=plot_files['map2d'], visible=True),
             gr.update(value=plot_files['map3d'], visible=True),
             gr.update(value=plot_files['std2d'], visible=True),
-            gr.update(value=plot_files['std3d'], visible=True)
-        )
-
-    except subprocess.CalledProcessError as e:
-        return (
-            gr.update(
-                value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>⚠️ Ramachandran analysis failed:<br><pre>{e.stderr.decode()}</pre></div>",
-                visible=True
-            ),
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False)
+            gr.update(value=plot_files['std3d'], visible=True),
+            gr.update(value=stats_html, visible=True)
         )
 
     except Exception as e:
         return (
-            gr.update(
-                value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Error: {str(e)}</div>",
-                visible=True
-            ),
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False),
+            gr.update(value=f"<div style='padding: 20px; background: #fee; color: #c33;'>❌ Error: {str(e)}</div>", visible=True),
+            gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False)
         )
