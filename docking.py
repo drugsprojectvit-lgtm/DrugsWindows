@@ -7,6 +7,7 @@ import os
 import glob
 import subprocess
 import re
+import shutil  # Added for directory removal
 import pandas as pd
 import gradio as gr
 from config import current_pdb_info, DOCKING_RESULTS_DIR, LIGAND_DIR, PRANKWEB_OUTPUT_DIR
@@ -32,6 +33,17 @@ def run_molecular_docking():
     )
     
     try:
+        # --- NEW: CLEANUP OLD RESULTS ---
+        # Completely remove the existing docking results directory to ensure a fresh start
+        if os.path.exists(DOCKING_RESULTS_DIR):
+            try:
+                shutil.rmtree(DOCKING_RESULTS_DIR)
+                print(f"Cleaned up old results at: {DOCKING_RESULTS_DIR}")
+            except Exception as e:
+                yield (gr.update(value=f"<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ Error deleting old results: {str(e)}</div>", visible=True), None, gr.update(choices=[]))
+                return
+        # --------------------------------
+
         # Input files and directories
         protein_pdbqt = current_pdb_info["prepared_pdbqt"]
         ligand_folder = LIGAND_DIR
@@ -79,9 +91,11 @@ def run_molecular_docking():
             yield (gr.update(value="<div style='padding: 20px; background: #fee; border-radius: 8px; color: #c33;'>❌ No ligand files found.</div>", visible=True), None, gr.update(choices=[]))
             return
         
-        # Directories
+        # Directories (Re-created here after deletion)
         output_dir_pdbqt = os.path.join(DOCKING_RESULTS_DIR, "pdbqt")
         output_dir_pdb = os.path.join(DOCKING_RESULTS_DIR, "pdb")
+        
+        # makedirs(exist_ok=True) will recreate the parent directory if it was deleted
         os.makedirs(output_dir_pdbqt, exist_ok=True)
         os.makedirs(output_dir_pdb, exist_ok=True)
         
@@ -191,8 +205,8 @@ def run_molecular_docking():
                                     # If successful, update the image path for all poses associated with this complex
                                     if os.path.exists(interactions_png):
                                          for entry in ligand_best_poses:
-                                             if entry['ligand'] == ligand_name and entry['pocket'] == pocket_name:
-                                                 entry['interaction_image'] = interactions_png
+                                              if entry['ligand'] == ligand_name and entry['pocket'] == pocket_name:
+                                                  entry['interaction_image'] = interactions_png
                                 except subprocess.CalledProcessError as e:
                                      print(f"Warning: pandamap failed for {complex_file}: {e.stderr}")
                                 except Exception as e:

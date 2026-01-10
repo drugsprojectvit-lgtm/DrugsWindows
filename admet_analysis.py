@@ -28,15 +28,47 @@ DISPLAY_COLUMNS = [
 # 2. HELPER FUNCTIONS
 # ==========================================
 
+import subprocess
+from rdkit import Chem
+
 def pdb_to_smiles(pdb_path):
-    """Convert PDB file to SMILES string using RDKit."""
+    """
+    Robust conversion of PDB to SMILES.
+    Tries RDKit first (strict), then falls back to OpenBabel (lenient).
+    """
+    # method 1: RDKit (Strict)
     try:
-        mol = Chem.MolFromPDBFile(pdb_path, removeHs=False)
-        if mol is None:
-            return None
-        return Chem.MolToSmiles(mol)
+        # sanitize=False allows reading "bad" molecules. removeHs=True removes the bad hydrogens causing the error.
+        mol = Chem.MolFromPDBFile(pdb_path, sanitize=False, removeHs=True)
+        if mol:
+            try:
+                # Try to clean up the molecule now that Hs are gone
+                Chem.SanitizeMol(mol)
+                return Chem.MolToSmiles(mol)
+            except Exception:
+                pass # RDKit couldn't fix it, move to fallback
     except Exception:
-        return None
+        pass
+
+    # Method 2: OpenBabel (Lenient - RECOMMENDED for Docking Results)
+    # Since you have obabel installed, this is the most reliable method for docking output
+    try:
+        # Command: obabel file.pdb -osmi
+        result = subprocess.run(
+            ['obabel', pdb_path, '-osmi'], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
+        
+        # Output format is usually: "SMILES\tFilename"
+        if result.returncode == 0 and result.stdout.strip():
+            smiles = result.stdout.strip().split()[0]
+            return smiles
+    except Exception as e:
+        print(f"OpenBabel fallback failed for {pdb_path}: {e}")
+
+    return None
 
 def extract_docking_score(pdb_file):
     """Extract docking score from PDB file REMARK lines."""
