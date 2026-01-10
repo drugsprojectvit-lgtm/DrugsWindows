@@ -48,12 +48,10 @@ def extract_favoured_info(csv_path: str):
             content = f.read()
             
             # Search for pattern: Favoured: ,count,(percent%)
-            # We specifically want to capture the number inside the brackets
             match = re.search(r'Favoured:.*\((\d+\.?\d*)%\)', content)
             
             if match:
                 percentage = float(match.group(1))
-                # Format exactly as requested: "Favoured: 95.079%"
                 display_string = f"Favoured: {percentage}%"
                 return percentage, display_string
             else:
@@ -200,36 +198,36 @@ def run_ramplot(progress=gr.Progress()):
 
     pdb_id = current_pdb_info["pdb_id"]
     pdb_path = current_pdb_info["pdb_path"]
+    swiss_model_used = False
     
     # 2. Check for REMARK 465
     progress(0.05, desc="🔍 Checking for missing residues (REMARK 465)...")
     has_missing_residues = check_remark_465(pdb_path)
     
     if has_missing_residues:
-        progress(0.1, desc="⚠️ Missing residues detected - SWISS-MODEL required...")
+        progress(0.1, desc="⚠️ Missing residues detected - Attempting SWISS-MODEL...")
         fasta_path = os.path.join(PROTEINS_DIR, f"{pdb_id}.fasta")
         
+        # --- FALLBACK CHECK 1: FASTA Existence ---
         if not os.path.exists(fasta_path):
-            return (
-                gr.update(value=f"<div style='padding: 20px; background: #fee; color: #c33;'>❌ FASTA file not found.</div>", visible=True),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False)
-            )
-        
-        swiss_model_path = run_swiss_model(fasta_path, pdb_id, progress)
-        
-        if not swiss_model_path:
-            return (
-                gr.update(value="<div style='padding: 20px; background: #fee; color: #c33;'>❌ SWISS-MODEL failed.</div>", visible=True),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False), gr.update(visible=False),
-                gr.update(visible=False)
-            )
-        
-        pdb_path = swiss_model_path
-        current_pdb_info["pdb_path"] = swiss_model_path
-        progress(0.9, desc="✅ SWISS-MODEL complete...")
+            print("Warning: FASTA file not found. Skipping SWISS-MODEL and using original PDB.")
+            progress(0.15, desc="⚠️ FASTA missing - Using original structure...")
+            # We proceed with original pdb_path
+        else:
+            # Try running SWISS-MODEL
+            swiss_model_path = run_swiss_model(fasta_path, pdb_id, progress)
+            
+            # --- FALLBACK CHECK 2: API Success ---
+            if not swiss_model_path:
+                print("Warning: SWISS-MODEL failed. Skipping and using original PDB.")
+                progress(0.2, desc="⚠️ SWISS-MODEL failed - Reverting to original PDB...")
+                # We proceed with original pdb_path
+            else:
+                # SUCCESS: Switch to new model
+                pdb_path = swiss_model_path
+                current_pdb_info["pdb_path"] = swiss_model_path
+                swiss_model_used = True
+                progress(0.9, desc="✅ SWISS-MODEL complete...")
     else:
         progress(0.1, desc="✅ No missing residues - using original...")
 
@@ -244,6 +242,12 @@ def run_ramplot(progress=gr.Progress()):
 
         progress(0.5, desc="Executing ramplot command...")
 
+        # We must ensure we run ramplot on the SPECIFIC file we decided on (original or model)
+        # ramplot typically takes a folder input ("-i input_folder"). 
+        # To ensure it processes the correct file if we switched to a model, 
+        # we might need to be careful if both files exist in the folder.
+        # However, usually ramplot processes all PDBs in the folder.
+        
         cmd = [
             "ramplot", "pdb", "-i", input_folder, "-o", output_folder,
             "-m", "0", "-r", "600", "-p", "png"
@@ -301,8 +305,10 @@ def run_ramplot(progress=gr.Progress()):
         progress(1.0, desc="✅ Complete!")
 
         success_msg = "✅ Ramachandran plot analysis completed!"
-        if has_missing_residues:
+        if swiss_model_used:
             success_msg += "<br>🔧 Used SWISS-MODEL homology model"
+        elif has_missing_residues:
+             success_msg += "<br>⚠️ Original structure used (SWISS-MODEL skipped/failed)"
         
         return (
             gr.update(value=f"<div style='padding: 20px; background: #d4edda; border-radius: 8px; color: #155724;'>{success_msg}</div>", visible=True),
