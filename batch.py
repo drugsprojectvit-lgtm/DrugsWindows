@@ -6,6 +6,7 @@ UPDATED:
 - Compatible with Local P2Rank (prankweb.py).
 - Compatible with Clean Docking workflow (docking.py).
 - Compatible with robust ADMET analysis (admet_analysis.py).
+- ADDED: FASTA download in Step 1 to support SWISS-MODEL fallback in Step 2.
 """
 
 import os
@@ -19,6 +20,7 @@ import time
 import glob
 import base64
 import re
+import requests # Added for FASTA download
 
 # Import modules from your app
 from config import current_pdb_info, PROTEINS_DIR, DOCKING_RESULTS_DIR, RAMPLOT_OUTPUT_DIR
@@ -236,6 +238,33 @@ class ProteinPipelineBatch:
             dest_pdb = step_dir / f"{pdb_id}.pdb"
             shutil.copy2(pdb_path, dest_pdb)
             
+            # --- NEW: Download FASTA for SWISS-MODEL Support ---
+            try:
+                print(f"  ⬇️  Fetching FASTA for {pdb_id} (Required for potential Homology Modeling)...")
+                fasta_url = f"https://www.rcsb.org/fasta/entry/{pdb_id}"
+                response = requests.get(fasta_url, timeout=10)
+                
+                if response.status_code == 200:
+                    fasta_content = response.text
+                    
+                    # 1. Save to PROTEINS_DIR (Required by ramachandran.py logic)
+                    os.makedirs(PROTEINS_DIR, exist_ok=True)
+                    main_fasta_path = os.path.join(PROTEINS_DIR, f"{pdb_id}.fasta")
+                    with open(main_fasta_path, "w") as f:
+                        f.write(fasta_content)
+                        
+                    # 2. Save to Batch Step Directory (For record keeping)
+                    batch_fasta_path = step_dir / f"{pdb_id}.fasta"
+                    with open(batch_fasta_path, "w") as f:
+                        f.write(fasta_content)
+                        
+                    print(f"  ✅ FASTA saved to {main_fasta_path}")
+                else:
+                    print(f"  ⚠️ Failed to download FASTA (Status: {response.status_code})")
+            except Exception as fasta_err:
+                print(f"  ⚠️ Error downloading FASTA: {fasta_err}")
+            # ----------------------------------------------------
+
             with open(pdb_path, 'r') as f: pdb_content = f.read()
             structure_html = show_structure(protein_text=pdb_content, pdb_id=pdb_id, protein_name=protein_name)
             self.save_3d_viewer_as_image(structure_html, step_dir / f"{pdb_id}_structure.png", f"{protein_name}")
@@ -565,9 +594,9 @@ class ProteinPipelineBatch:
 
 if __name__ == "__main__":
     protein_list = [
-    "KRAS",
-    "ACC"
+    "AKT1",
+    "KRAS"
 ]
 
-    batch_processor = ProteinPipelineBatch(output_base_dir="KRAS_FDA")
+    batch_processor = ProteinPipelineBatch(output_base_dir="FDA_drugs")
     results = batch_processor.run_batch(protein_list)

@@ -134,7 +134,7 @@ def run_molecular_docking():
                                     affinity = float(parts[1])
                                     
                                     # Filter good poses
-                                    if affinity <= -0.0:
+                                    if affinity <= 0.0:
                                         ligand_best_poses.append({
                                             'ligand': ligand_name,
                                             'pocket': pocket_name,
