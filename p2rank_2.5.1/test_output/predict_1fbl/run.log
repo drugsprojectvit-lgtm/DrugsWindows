@@ -1,0 +1,39 @@
+[INFO] Console - predicting pockets for proteins from dataset [1fbl.pdb]
+[INFO] PredictPocketsRoutine - outdir: C:\Users\Administrator\Desktop\p2rank_2.5.1\test_output/predict_1fbl
+[INFO] Model - Loading model from directory (v3 format): C:\Users\Administrator\Desktop\p2rank_2.5.1/models/default
+[INFO] FeatureSetup - enabledFeatures: [chem, volsite, protrusion, bfactor, atom_table]
+[INFO] Dataset - processing dataset [1fbl.pdb] using 0 threads
+[INFO] Dataset - 
+------------------------------------------------------------------------------------------------------------------------
+processing [1fbl.pdb] (1/1)
+------------------------------------------------------------------------------------------------------------------------
+
+[INFO] Console - processing [1fbl.pdb] (1/1)
+[INFO] Protein - loading protein [C:\Users\Administrator\Desktop\p2rank_2.5.1\test_data\1fbl.pdb]
+[INFO] PdbUtils - loading file [test_data/1fbl.pdb]
+[INFO] Struct - all groups in chain A: 367
+[INFO] Struct - all groups in chain A: 367
+[INFO] Struct - 367 groups in chain A
+[INFO] Protein - structure atoms: 3294
+[INFO] Protein - protein   atoms: 2902
+[INFO] Protein - ignoring ligands
+[INFO] FeatureSetup - enabledFeatures: [chem, volsite, protrusion, bfactor, atom_table]
+[INFO] Protein - SAS points: 5168
+[INFO] Protein - exposed protein atoms: 1825 of 2902
+[INFO] SLinkClusterer - clustering [47] elements
+[INFO] SLinkClusterer - clusters: [id:7( 7 ), id:25( 20 ), id:30( 2 ), id:32( 1 ), id:40( 5 ), id:43( 10 ), id:46( 2 )]
+[INFO] SLinkClusterer - clusters together: 47 / 47
+[INFO] PocketPredictor - PREDICTING POCKETS.... ====================================
+[INFO] PocketPredictor - SAS POINTS: 5168
+[INFO] PocketPredictor - LIGANDABLE POINTS: 47
+[INFO] PocketPredictor - CLUSTERS: 7
+[INFO] PocketPredictor - FILTERED CLUSTERS: 4
+[INFO] PocketPredictor - pocket 1 -  surf_atoms:  40   points:  20   score:    9.8
+[INFO] PocketPredictor - pocket 2 -  surf_atoms:  18   points:  10   score:    3.0
+[INFO] PocketPredictor - pocket 3 -  surf_atoms:  15   points:   7   score:    2.9
+[INFO] PocketPredictor - pocket 4 -  surf_atoms:  17   points:   5   score:    1.9
+[INFO] PredictionVisualizer - copying [C:\Users\Administrator\Desktop\p2rank_2.5.1\test_data\1fbl.pdb] to [C:\Users\Administrator\Desktop\p2rank_2.5.1\test_output/predict_1fbl/visualizations/data/1fbl.pdb]
+[INFO] Console - predicting pockets finished in 0 hours 0 minutes 21.131 seconds
+[INFO] Console - results saved to directory [C:\Users\Administrator\Desktop\p2rank_2.5.1\test_output\predict_1fbl]
+[INFO] Console - 
+[INFO] Console - Finished successfully in 0 hours 0 minutes 21.680 seconds.
